@@ -1,0 +1,105 @@
+#!/bin/bash
+set -e
+#user add user
+useradd -u 501 -G users -s /sbin/nologin -M -d /usr/local/mysql/bin mysql
+
+#add data Directory 
+mkdir -p /usr/local/mysql/{data,log,tmp,binlog}
+chown -R mysql.mysql /usr/local/mysql/
+chmod 750 /usr/local/mysql/data/
+
+#解决依赖
+yum -y install bzip2 vim wget lsof lrzsz gcc gcc-c++ ncurses ncurses-devel openssl openssl-devel cmake bison zlib-devel
+
+[ ! -d /opop ] && mkdir /opop 
+cd /opop
+
+#下载包
+wget https://www.percona.com/downloads/Percona-Server-5.7/Percona-Server-5.7.13-6/source/tarball/percona-server-5.7.13-6.tar.gz  http://nchc.dl.sourceforge.net/project/boost/boost/1.59.0/boost_1_59_0.tar.gz   https://nchc.dl.sourceforge.net/project/libpng/zlib/1.2.11/zlib-1.2.11.tar.gz
+for i in `ls *.gz`;do tar -zxvf $i -C /usr/local;done
+rm -rf /usr/local/boost_1_59_0/
+
+cd /usr/local/zlib-1.2.11/
+./configure --prefix=/usr/local/zlib
+make && make install
+
+mkdir /usr/local/boost
+cp /opop/boost_1_59_0.tar.gz /usr/local/boost
+
+cd /usr/local/percona-server-5.7.13-6/
+cmake . -DCMAKE_INSTALL_PREFIX=/usr/local/mysql \
+-DMYSQL_UNIX_ADDR=/usr/local/mysql/mysql.sock \
+-DMYSQL_DATADIR=/usr/local/mysql/data/ \
+-DSYSCONFDIR=/etc \
+-DMYSQL_TCP_PORT=3306 \
+-DWITH_INNOBASE_STORAGE_ENGINE=1 \
+-DWITH_PARTITION_STORAGE_ENGINE=1 \
+-DWITH_BLACKHOLE_STORAGE_ENGINE=1 \
+-DWITH_MYISAM_STORAGE_ENGINE=1 \
+-DENABLED_LOCAL_INFILE=1 \
+-DWITH_DEBUG=0 \
+-DDEFAULT_CHARSET=utf8 \
+-DDEFAULT_COLLATION=utf8_general_ci \
+-DWITH_EXTRA_CHARSETS=all \
+-DMYSQL_MAINTAINER_MODE=0 \
+-DWITH_EDITLINE=bundled \
+-DWITH_SSL:STRING=bundled \
+-DWITH_ZLIB:STRING=bundled \
+-DZLIB_LIBRARY:FILEPATH=/usr/local/zlib/lib/ \
+-DZLIB_INCLUDE_DIR:PATH=/usr/local/zlib/include/ \
+-DENABLE_DOWNLOADS=1 \
+-DWITH-SYSTEMD=1 \
+-DWITH_BOOST=/usr/local/boost
+
+#更多参数在MySQL"当前"目录下执行 cmake . -LH 即可获得更多
+
+make -j 2 && make install
+
+echo "export PATH=/usr/local/mysql/bin:\$PATH" >> /etc/profile
+sleep 2
+source /etc/profile
+
+echo -e '#!/bin/bash' >~/2.sh
+echo -e "ip a|grep ens|grep inet|awk -F ' ' '{print \$2}'|awk -F '/' '{print \$1}'|awk -F '.' '{print \$4}'" >>~/2.sh
+
+aa=`du -s /usr/local/mysql/data/`
+bb=${aa%%/*}
+if [ $bb -le 0 ];then
+
+#初始化数据库
+    /usr/local/mysql/bin/mysqld --initialize --user=mysql --basedir=/usr/local/mysql --datadir=/usr/local/mysql/data/ >>~/1.txt 2>&1
+
+#MySQL5.7 SSL加密连接配置(Secure Socket Layer)
+    /usr/local/mysql/bin/mysql_ssl_rsa_setup --user=mysql --basedir=/usr/local/mysql --datadir=/usr/local/mysql/data/
+
+cp /etc/my.cnf  /etc/my.cnf.bak
+sed -i "s/datadir=\/var\/lib\/mysql/datadir=\/usr\/local\/mysql\/data/" /etc/my.cnf
+sed -i "/datadir=\/usr\/local\/mysql/i\basedir=\/usr\/local\/mysql" /etc/my.cnf
+sed -i "/basedir=\/usr\/local\/mysql/a\port=3306" /etc/my.cnf
+sed -i "/port=3306/a\log-error=\/usr\/local\/mysql\/data\/mysqld.err" /etc/my.cnf
+sed -i "/port=3306/a\server_id=`source ~/2.sh`" /etc/my.cnf
+rm -rf ~/2.sh
+sed -i "/pid-file=/a\log-error=\/usr\/local\/mysql\/data\/mysqld.log" /etc/my.cnf
+
+cp /usr/local/mysql/support-files/mysql.server /etc/init.d/mysqld
+chmod +x /etc/init.d/mysqld
+chkconfig mysqld on
+
+mkdir /var/run/mysqld
+chown -R mysql.mysql /var/run/mysqld/
+service mysqld start
+ln -s /var/lib/mysql/mysql.sock  /usr/local/mysql/
+service mysqld restart
+lsof -i:3306
+    if [ $? -eq 0 ];then
+        clear
+        a=`cat ~/1.txt |grep "password"|awk -F 'localhost: ' '{print $2}'`
+        echo -e "登录mysql的密码为:\033[31m $a \033[0m"
+        mysql -uroot -p 
+    else
+        echo -e "\033[31mMYSQL并未正确启动...\033[0m"
+    fi
+else
+    echo -e "\033[31mMYSQL初始化失败,/usr/local/mysql/data/中已有数据,备份(或del)后重新初始化\033[0m"
+fi
+

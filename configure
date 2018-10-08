@@ -1,0 +1,190 @@
+
+声明：关闭防火墙
+
+
+
+cat /etc/centos-release
+CentOS Linux release 7.4.1708 (Core)
+
+IP:
+master   192.168.3.105
+slave    192.168.3.106
+
+
+
+
+
+
+master端：
+mysql -uroot -p     #可以接-e然后接命令
+create user zhangsan;
+grant replication slave on *.* to 'zhangsan'@'192.168.3.106'identified by '123456';
+flush privileges;
+
+
+vim /etc/my.cnf
+[mmysqld]
+....
+	....
+
+server-id=1
+gtid-mode                  = on       #开启GTID需要
+enforce-gtid-consistency   = true     #开启GTID需要
+
+log-bin-index=master-bin.index
+
+#binlog
+master-info-repository = TABLE        #Slave配置需要
+relay-log-info_repository  = TABLE    #Slave配置需要
+log_bin=master-binlog
+binlog-format =ROW                    #Slave配置需要
+log-slave-updates = ON
+binlog-checksum = CRC32
+master-verify-checksum = 1
+....
+	.....
+
+
+service mysqld restart
+
+
+mysql -uroot -p          #登录数据库                  
+mysql> show variables like '%gtid%';        #查看主库与从库的GTID是否开启
+mysql> show variables like '%gtid_next%';
+mysql> show variables like '%uuid%';        #查看服务器server_uuid
+
+
+
+
+
+
+slave端：(脚本安装好以后，除自带的选项外新添加以下选项)
+vim /etc/my.cnf
+[mysqld]
+basedir=/usr/local/mysql
+port=3306
+
+#binlog
+log-slave-updates = ON
+log-bin=slave-binlog
+master-info-repository      = TABLE      #Slave配置需要
+relay-log-info_repository   = TABLE      #Slave配置需要
+binlog-format                =ROW        #Slave配置需要
+
+#GTID
+server_id=106
+gtid-mode                   = on         #开启GTID需要
+enforce-gtid-consistency    = true       #开启GTID需要
+binlog-checksum = CRC32
+master-verify-checksum = 1
+skip_slave_start=1
+
+
+service mysqld restart
+
+
+mysql> change master to
+master_host='192.168.3.105',      #master端地址
+master_port=3306, 
+master_user='zhangsan',           #master端授权的用户
+master_password='123456,    	  #master端授权用户的密码
+master_auto_position=1;
+
+
+mysql> start slave;
+mysql> show slave status\G;
+*************************** 1. row ***************************
+               Slave_IO_State: Waiting for master to send event
+                  Master_Host: 192.168.3.105
+                  Master_User: zhangsan
+                  Master_Port: 3306
+                Connect_Retry: 60
+              Master_Log_File: master-binlog.000001
+          Read_Master_Log_Pos: 154
+               Relay_Log_File: localhost-relay-bin.000002
+                Relay_Log_Pos: 375
+        Relay_Master_Log_File: master-binlog.000001
+    		 Slave_IO_Running: Yes                #确保IO线程是Yes状态
+    		Slave_SQL_Running: Yes		      #确保SQL线程是Yes状态
+....
+	....
+
+
+
+
+
+
+master端测试：
+mysql -uroot -p          #登录数据库
+mysql> show databases;
+mysql> show master status;
++----------------------+----------+--------------+------------------+-------------------+
+| File                 | Position | Binlog_Do_DB | Binlog_Ignore_DB | Executed_Gtid_Set |
++----------------------+----------+--------------+------------------+-------------------+
+| master-binlog.000001 |      154 |              |                  |                   |
++----------------------+----------+--------------+------------------+-------------------+
+1 row in set (0.00 sec)
+
+mysql> create database opop;
+mysql> use opop;
+mysql> create table a1(id int,name char(20),sex char(10));
+mysql> desc a1;
++-------+----------+------+-----+---------+-------+
+| Field | Type     | Null | Key | Default | Extra |
++-------+----------+------+-----+---------+-------+
+| id    | int(11)  | YES  |     | NULL    |       |
+| name  | char(20) | YES  |     | NULL    |       |
+| sex   | char(10) | YES  |     | NULL    |       |
++-------+----------+------+-----+---------+-------+
+3 rows in set (0.04 sec
+
+
+
+mysql> show master status;
++----------------------+----------+--------------+------------------+------------------------------------------+
+| File                 | Position | Binlog_Do_DB | Binlog_Ignore_DB | Executed_Gtid_Set                        |
++----------------------+----------+--------------+------------------+------------------------------------------+
+| master-binlog.000001 |      502 |              |                  | 889cd7e6-bbb7-11e8-9461-000c29f304ff:1-2 |
++----------------------+----------+--------------+------------------+------------------------------------------+
+1 row in set (0.00 sec)
+
+
+
+
+
+
+
+
+slave端测试：
+mysql -uroot -p
+mysql> show databases;
++--------------------+
+| Database           |
++--------------------+
+| information_schema |
+| mysql              |
+| opop               |
+| performance_schema |
+| sys                |
++--------------------+
+5 rows in set (0.04 sec)
+
+
+mysql> use opop;
+mysql> show tables;
++----------------+
+| Tables_in_opop |
++----------------+
+| a1             |
++----------------+
+1 row in set (0.00 sec)
+
+mysql> desc a1;
++-------+----------+------+-----+---------+-------+
+| Field | Type     | Null | Key | Default | Extra |
++-------+----------+------+-----+---------+-------+
+| id    | int(11)  | YES  |     | NULL    |       |
+| name  | char(20) | YES  |     | NULL    |       |
+| sex   | char(10) | YES  |     | NULL    |       |
++-------+----------+------+-----+---------+-------+
+3 rows in set (0.00 sec)
